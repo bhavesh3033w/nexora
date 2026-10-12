@@ -21,12 +21,21 @@ export interface IActionItem {
   status: 'open' | 'completed';
 }
 
+export type ActionItemStatus = 'todo' | 'doing' | 'done';
+
 export interface IMeetingReportActionItem {
   id: string;
   text: string;
   owner?: string;
   deadline?: string;
+  /** 'transcript' when the deadline was stated in the meeting, 'default' when Nexora assigned one. */
+  deadlineSource?: 'transcript' | 'default';
+  priority?: 'low' | 'medium' | 'high';
   done: boolean;
+  status?: ActionItemStatus;
+  completedAt?: string;
+  /** Task created in the Projects/Tasks workspace for this action item. */
+  taskId?: string;
 }
 
 export interface IMeetingReport {
@@ -37,7 +46,7 @@ export interface IMeetingReport {
   risks: string[];
   followUps: string[];
   generatedAt: string;
-  source: 'google-transcript' | 'manual-transcript';
+  source: 'google-transcript' | 'manual-transcript' | 'recording';
   engine: string;
 }
 
@@ -51,6 +60,9 @@ export interface IMeetingInsights {
     dueDate?: string;
     status: 'open' | 'completed';
   }>;
+  decisions?: string[];
+  risks?: string[];
+  followUps?: string[];
   sentiment: {
     overall: 'positive' | 'neutral' | 'negative';
     score: number;
@@ -62,6 +74,8 @@ export interface IMeetingInsights {
     seconds?: number;
   }>;
   engagementScore?: number;
+  /** Which analyzer produced these insights. */
+  engine?: string;
 }
 
 export interface IMeeting extends Document {
@@ -98,6 +112,7 @@ export interface IMeeting extends Document {
   endedAt?: string;
   processedAt?: string;
   recordingUrl?: string;
+  recordingName?: string;
   tags: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -243,6 +258,9 @@ const MeetingSchema = new Schema<IMeeting>(
       type: String,
     },
     recordingUrl: {
+      type: String,
+    },
+    recordingName: {
       type: String,
     },
     tags: [{ type: String }],

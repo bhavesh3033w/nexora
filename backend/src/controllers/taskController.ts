@@ -5,6 +5,7 @@ import { Project } from '../models/Project.js';
 import { ActivityLog } from '../models/ActivityLog.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 import { sendSuccess, sendError } from '../utils/response.js';
+import { MeetingReportService } from '../services/meetingReportService.js';
 
 export const createTaskSchema = z.object({
   title: z.string().min(1, 'Task title is required'),
@@ -146,15 +147,23 @@ export class TaskController {
       delete updates._id;
       delete updates.id;
 
+      const unset: Record<string, ''> = {};
       if (updates.status === 'done' && !updates.completedAt) {
         updates.completedAt = new Date();
+      } else if (updates.status !== undefined && updates.status !== 'done') {
+        delete updates.completedAt;
+        unset.completedAt = '';
       }
 
       if (updates.due && !updates.dueDate) {
         updates.dueDate = new Date(updates.due);
       }
 
-      const task = await Task.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true });
+      const task = await Task.findByIdAndUpdate(
+        id,
+        Object.keys(unset).length ? { $set: updates, $unset: unset } : { $set: updates },
+        { new: true, runValidators: true }
+      );
       if (!task) {
         sendError(res, 'Task not found', 404);
         return;
@@ -173,6 +182,12 @@ export class TaskController {
           detail: `Updated task "${task.title}" (status: ${task.status})`,
           level: 'info',
         });
+      }
+
+      try {
+        await MeetingReportService.syncFromTask(task);
+      } catch (syncErr) {
+        console.error('[TaskController] meeting report sync failed:', syncErr);
       }
 
       sendSuccess(res, task, 'Task updated successfully');
@@ -194,7 +209,11 @@ export class TaskController {
       if (order !== undefined) updates.order = order;
       if (status === 'done') updates.completedAt = new Date();
 
-      const task = await Task.findByIdAndUpdate(id, { $set: updates }, { new: true });
+      const task = await Task.findByIdAndUpdate(
+        id,
+        status === 'done' ? { $set: updates } : { $set: updates, $unset: { completedAt: '' } },
+        { new: true }
+      );
       if (!task) {
         sendError(res, 'Task not found', 404);
         return;
@@ -203,6 +222,12 @@ export class TaskController {
       const pid = task.projectId || (task.project ? task.project.toString() : '');
       if (pid) {
         await TaskController.recalculateProjectProgress(pid);
+      }
+
+      try {
+        await MeetingReportService.syncFromTask(task);
+      } catch (syncErr) {
+        console.error('[TaskController] meeting report sync failed:', syncErr);
       }
 
       sendSuccess(res, task, 'Task status updated');

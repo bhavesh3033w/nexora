@@ -16,6 +16,9 @@ export interface ITask extends Document {
   order: number;
   tags: string[];
   completedAt?: Date;
+  /** Set when the task was generated from a meeting report action item. */
+  meetingId?: string;
+  actionItemId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +91,13 @@ const TaskSchema = new Schema<ITask>(
     ],
     completedAt: {
       type: Date,
+    },
+    meetingId: {
+      type: String,
+      index: true,
+    },
+    actionItemId: {
+      type: String,
     },
   },
   {

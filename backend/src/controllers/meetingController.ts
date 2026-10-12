@@ -1,11 +1,94 @@
-import { Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { Meeting } from '../models/Meeting.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import multer from 'multer';
+import { Meeting, ActionItemStatus } from '../models/Meeting.js';
+import { Task } from '../models/Task.js';
 import { ActivityLog } from '../models/ActivityLog.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 import { sendSuccess, sendError, sendPaginated } from '../utils/response.js';
-import { TranscriptService } from '../services/transcriptService.js';
-import { AiAnalyzerService } from '../services/aiAnalyzerService.js';
+import { MeetingReportService } from '../services/meetingReportService.js';
+import { summarize, TrackerInput } from '../services/actionTrackerService.js';
+import {
+  RecordingTranscriber,
+  RECORDING_MIME_TYPES,
+  MAX_RECORDING_BYTES,
+  TranscriptionError,
+} from '../services/recordingTranscriber.js';
+
+const EXT_MIME: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+};
+
+/** Picks the MIME type sent to the transcriber, falling back to the file extension. */
+function resolveRecordingMime(file: { mimetype: string; originalname: string }): string {
+  if (RECORDING_MIME_TYPES.includes(file.mimetype)) return file.mimetype;
+  return EXT_MIME[path.extname(file.originalname).toLowerCase()] ?? file.mimetype;
+}
+
+const recordingMulter = multer({
+  storage: multer.diskStorage({
+    destination: os.tmpdir(),
+    filename: (_req, file, cb) =>
+      cb(null, `nexora-rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: MAX_RECORDING_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const genericType = !file.mimetype || file.mimetype === 'application/octet-stream';
+    if (RECORDING_MIME_TYPES.includes(file.mimetype) || (genericType && ext in EXT_MIME)) {
+      cb(null, true);
+      return;
+    }
+    cb(new UnsupportedRecordingError());
+  },
+}).single('recording');
+
+class UnsupportedRecordingError extends Error {
+  constructor() {
+    super('Unsupported recording type. Upload an audio or video file (mp4, webm, mov, mkv, m4a, mp3, wav, ogg, aac, flac).');
+  }
+}
+
+/** Multer middleware for POST /meetings/:id/recording; upload errors become JSON responses. */
+export function recordingUpload(req: Request, res: Response, next: NextFunction): void {
+  recordingMulter(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    if (err instanceof UnsupportedRecordingError) {
+      sendError(res, err.message, 400, undefined, 'VALIDATION_ERROR');
+      return;
+    }
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        sendError(
+          res,
+          `Recording is too large. Maximum size is ${Math.round(MAX_RECORDING_BYTES / (1024 * 1024))} MB.`,
+          413,
+          undefined,
+          'VALIDATION_ERROR'
+        );
+        return;
+      }
+      sendError(res, `Upload failed: ${err.message}`, 400, undefined, 'VALIDATION_ERROR');
+      return;
+    }
+    next(err);
+  });
+}
 
 export const createMeetingSchema = z.object({
   title: z.string().min(1, 'Meeting title is required'),
@@ -283,16 +366,16 @@ export class MeetingController {
     next: NextFunction
   ): Promise<void> {
     try {
+      if (!req.user) {
+        sendError(res, 'Unauthorized', 401);
+        return;
+      }
       const { id } = req.params;
-      const rawTranscript =
-        req.body.rawTranscript ||
-        req.body.text ||
-        `
-Alice [00:05]: Welcome everyone. We are here to review the delivery milestones for the adaptive workspace.
-Client Lead [00:15]: The personalization requirements and UI look very promising. What are the next steps?
-Alice [00:30]: We will finalize the deterministic adaptation rules and deliver the report by Thursday.
-Bob [00:45]: I will verify the Mongo data seed and ensure all automated tests pass.
-        `;
+      const raw = String(req.body?.rawTranscript || req.body?.text || '').trim();
+      if (!raw) {
+        sendError(res, 'Transcript text is required.', 400, undefined, 'VALIDATION_ERROR');
+        return;
+      }
 
       const meeting = await Meeting.findById(id);
       if (!meeting) {
@@ -300,44 +383,84 @@ Bob [00:45]: I will verify the Mongo data seed and ensure all automated tests pa
         return;
       }
 
-      const cleanedResult = TranscriptService.parseRawTranscript(rawTranscript);
-      const insights = await AiAnalyzerService.analyzeMeeting(meeting.title, cleanedResult.entries);
-      insights.talkTimeDistribution = cleanedResult.talkTimeDistribution;
-
-      const structuredReport = {
-        summary: insights.summary,
-        topics: insights.topics,
-        decisions: [
-          'Approved the deterministic intent-to-interface adaptation architecture.',
-          'Agreed on zero external LLM API dependency for core workspace rules.',
-        ],
-        actionItems: insights.actionItems.map((a: any, i: number) => ({
-          id: `ai_${i}`,
-          text: a.task,
-          owner: a.assignee || 'Dev Team',
-          deadline: a.dueDate || new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10),
-          done: false,
-        })),
-        risks: ['Ensure fast response times without network roundtrips.'],
-        followUps: ['Share updated workspace walkthrough with stakeholders.'],
-        generatedAt: new Date().toISOString(),
-        source: 'manual-transcript' as const,
-        engine: 'Nexora Deterministic Insight Engine',
-      };
-
-      meeting.rawTranscript = rawTranscript;
-      meeting.cleanedTranscript = cleanedResult.cleanedText;
-      meeting.transcript = cleanedResult.entries;
-      meeting.insights = insights;
-      meeting.report = structuredReport;
-      meeting.reportStatus = 'ready';
-      meeting.status = 'completed';
-      meeting.processedAt = new Date().toISOString();
-
-      await meeting.save();
-
+      await MeetingReportService.generate(meeting, raw, 'manual-transcript', req.user.userId);
       sendSuccess(res, meeting, 'Transcript processed successfully');
     } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async uploadRecording(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    const file = req.file;
+    const cleanup = () => {
+      if (file?.path) fs.promises.unlink(file.path).catch(() => undefined);
+    };
+    try {
+      if (!req.user) {
+        cleanup();
+        sendError(res, 'Unauthorized', 401);
+        return;
+      }
+      if (!file) {
+        sendError(res, 'A recording file is required (multipart field "recording").', 400, undefined, 'VALIDATION_ERROR');
+        return;
+      }
+      const meeting = await Meeting.findById(req.params.id);
+      if (!meeting) {
+        cleanup();
+        sendError(res, 'Meeting not found', 404);
+        return;
+      }
+      if (!RecordingTranscriber.isConfigured()) {
+        cleanup();
+        sendError(
+          res,
+          'Recording transcription is not configured on the server (GEMINI_API_KEY is missing). Upload a transcript instead.',
+          503,
+          undefined,
+          'AI_PROVIDER_ERROR'
+        );
+        return;
+      }
+
+      const userId = req.user.userId;
+      const mimeType = resolveRecordingMime(file);
+      meeting.status = 'processing';
+      meeting.reportStatus = 'processing';
+      meeting.reportError = undefined;
+      meeting.recordingName = file.originalname;
+      await meeting.save();
+      sendSuccess(res, meeting, 'Recording uploaded. Transcription started.', 202);
+
+      // Background: transcribe -> generate report. Not awaited by the request.
+      void (async () => {
+        try {
+          const transcript = await RecordingTranscriber.transcribe(file.path, mimeType, file.originalname);
+          await MeetingReportService.generate(meeting, transcript, 'recording', userId);
+        } catch (err: any) {
+          console.error('[uploadRecording] transcription failed:', err?.message || err);
+          try {
+            const fresh = await Meeting.findById(meeting._id);
+            if (fresh) {
+              fresh.reportStatus =
+                err instanceof TranscriptionError && err.code === 'TRANSCRIPT_NOT_AVAILABLE' ? 'transcript_unavailable' : 'failed';
+              fresh.status = 'completed';
+              fresh.reportError = err?.message || 'Recording could not be processed.';
+              await fresh.save();
+            }
+          } catch (saveErr) {
+            console.error('[uploadRecording] failed to record error state:', saveErr);
+          }
+        } finally {
+          cleanup();
+        }
+      })();
+    } catch (err) {
+      cleanup();
       next(err);
     }
   }
@@ -357,7 +480,21 @@ Bob [00:45]: I will verify the Mongo data seed and ensure all automated tests pa
   ): Promise<void> {
     try {
       const { id, itemId } = req.params;
-      const { done } = req.body;
+      const body = req.body ?? {};
+      let status: ActionItemStatus;
+      if (body.status !== undefined) {
+        if (!['todo', 'doing', 'done'].includes(body.status)) {
+          sendError(res, "status must be one of 'todo', 'doing', 'done'.", 400, undefined, 'VALIDATION_ERROR');
+          return;
+        }
+        status = body.status;
+      } else if (body.done !== undefined) {
+        status = body.done === true || body.done === 'true' ? 'done' : 'todo';
+      } else {
+        sendError(res, 'Provide { status } or { done }.', 400, undefined, 'VALIDATION_ERROR');
+        return;
+      }
+      const done = status === 'done';
 
       const meeting = await Meeting.findById(id);
       if (!meeting) {
@@ -365,28 +502,74 @@ Bob [00:45]: I will verify the Mongo data seed and ensure all automated tests pa
         return;
       }
 
-      // Check in actions
       const act = meeting.actions.find((a) => a.id === itemId);
-      if (act) {
-        act.done = Boolean(done);
-      }
+      if (act) act.done = done;
 
-      // Check in checklist
       const chk = meeting.checklist.find((c) => c.id === itemId);
-      if (chk) {
-        chk.done = Boolean(done);
-      }
+      if (chk) chk.done = done;
 
-      // Check in report actionItems
-      if (meeting.report?.actionItems) {
-        const rAct = meeting.report.actionItems.find((a: any) => a.id === itemId);
-        if (rAct) {
-          rAct.done = Boolean(done);
-        }
+      const reportItem = await MeetingReportService.setItemStatus(meeting, itemId, status);
+
+      if (!act && !chk && !reportItem) {
+        sendError(res, 'Action item not found', 404);
+        return;
       }
 
       await meeting.save();
       sendSuccess(res, meeting, 'Action item updated');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  public static async actionTracker(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      if (!req.user) {
+        sendError(res, 'Unauthorized', 401);
+        return;
+      }
+      const meetings = await Meeting.find({ report: { $ne: null } });
+      for (const m of meetings) {
+        // Backfills tasks for reports generated before action items were mirrored into Tasks.
+        if (await MeetingReportService.syncTasks(m, req.user.userId)) await m.save();
+      }
+      const meetingById = new Map(meetings.map((m) => [m._id.toString(), m]));
+
+      const tasks = await Task.find({ meetingId: { $exists: true, $ne: null } });
+      const inputs: TrackerInput[] = [];
+      for (const t of tasks) {
+        const m = meetingById.get(String(t.meetingId));
+        if (!m) continue;
+        const item = m.report?.actionItems?.find((a) => a.id === t.actionItemId);
+        const rawStatus = t.status as string;
+        const status: TrackerInput['status'] =
+          rawStatus === 'done' ? 'done' : rawStatus === 'todo' || rawStatus === 'backlog' ? 'todo' : 'doing';
+        const rawPriority = t.priority as string;
+        const priority: TrackerInput['priority'] =
+          rawPriority === 'urgent' || rawPriority === 'high' ? 'high' : rawPriority === 'low' ? 'low' : 'medium';
+        inputs.push({
+          id: t._id.toString(),
+          text: t.title,
+          owner: t.assignee || 'Unassigned',
+          status,
+          priority,
+          deadline: t.due || undefined,
+          deadlineSource: item?.deadlineSource,
+          completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : undefined,
+          createdAt: t.createdAt ? new Date(t.createdAt).toISOString() : undefined,
+          meetingId: m._id.toString(),
+          meetingTitle: m.title,
+          meetingDate: m.date || (m.scheduledAt ? new Date(m.scheduledAt).toISOString().slice(0, 10) : ''),
+          actionItemId: t.actionItemId,
+        });
+      }
+
+      const today = new Date().toLocaleDateString('en-CA');
+      sendSuccess(res, summarize(inputs, today), 'Action tracker retrieved');
     } catch (err) {
       next(err);
     }

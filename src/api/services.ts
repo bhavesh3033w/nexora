@@ -18,6 +18,8 @@ import type {
   Session,
   StartResult,
   Task,
+  ActionStatus,
+  TrackerSummary,
 } from '../types';
 
 /** Guards and normalizes API list responses, handling both raw JSON arrays and { success, data } envelopes. */
@@ -238,6 +240,23 @@ export const meetingService = {
   },
   setActionItem: async (id: string, itemId: string, done: boolean): Promise<Meeting> => {
     const res = await http.patch<any>(`/meetings/${id}/action-items/${itemId}`, { done });
+    return res.data?.data ?? res.data;
+  },
+  setActionStatus: async (id: string, itemId: string, status: ActionStatus): Promise<Meeting> => {
+    const res = await http.patch<any>(`/meetings/${id}/action-items/${itemId}`, { status });
+    return res.data?.data ?? res.data;
+  },
+  /** Uploads a Google Meet recording (audio/video). The server replies 202 and transcribes in the background (reportStatus 'processing'). */
+  uploadRecording: async (id: string, file: File, onProgress?: (pct: number) => void): Promise<Meeting> => {
+    const form = new FormData(); form.append('recording', file);
+    const res = await http.post<any>(`/meetings/${id}/recording`, form, {
+      timeout: 0,
+      onUploadProgress: e => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)); },
+    });
+    return res.data?.data ?? res.data;
+  },
+  actionTracker: async (): Promise<TrackerSummary> => {
+    const res = await http.get<any>('/meetings/action-tracker');
     return res.data?.data ?? res.data;
   },
 };

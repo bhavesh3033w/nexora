@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ListChecks } from 'lucide-react';
 import { errorMessage } from '../../api/client';
 import { meetingService } from '../../api/services';
 import { Banner, Empty, Page, Skeletons } from '../../components/ui';
@@ -22,7 +22,7 @@ export default function MeetingInsights() {
   const reset = () => { setQ(''); setStatus(''); setClient(''); setFrom(''); setTo(''); };
 
   return (
-    <Page title="Meeting Intelligence" sub="Reports, decisions and action items from your meetings" actions={<Link className="btn" to="/app/meetings"><ArrowLeft size={16} /> Meetings</Link>}>
+    <Page title="Meeting Intelligence" sub="Reports, decisions and action items from your meetings" actions={<><Link className="btn" to="/app/meetings"><ArrowLeft size={16} /> Meetings</Link><Link className="btn" to="/app/tracker"><ListChecks size={16} /> Action Tracker</Link></>}>
       {error && <Banner kind="error">{error} <button className="btn sm" onClick={() => void refresh()}>Retry</button></Banner>}{err && <Banner kind="error">{err}</Banner>}
       {loading ? <Skeletons n={4} /> : <>
         <div className="grid g4">{[['Total meetings', meetings.length], ['Completed', completed], ['Upcoming', upcoming], ['Awaiting report', awaiting]].map(([l, v]) => <div key={l} className="card stat"><span className="muted small">{l}</span><b>{v}</b></div>)}</div>

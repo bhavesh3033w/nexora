@@ -19,6 +19,7 @@ export const env = {
   CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
 
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+  GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',

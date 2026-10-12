@@ -12,6 +12,8 @@ import { User } from '../models/User.js';
 import { Meeting } from '../models/Meeting.js';
 import { Project } from '../models/Project.js';
 import { classifyIntentDeterministically } from '../controllers/adaptationController.js';
+import { resolveDeadline } from '../utils/deadline.js';
+import { classify, summarize, TrackerInput } from '../services/actionTrackerService.js';
 
 interface TestResult {
   name: string;
@@ -230,6 +232,97 @@ Alice [00:30]: Excellent. Let's make sure the action items are assigned.
     for (const widgetId of res.rule.order) {
       assert(approvedWidgets.includes(widgetId), `Widget ${widgetId} must be in approved registry`);
     }
+  });
+
+  // Group 9: Meeting deadlines, transcript import & Action Tracker (pure, DB-free)
+  console.log('\n[Suite 9: Deadlines, Transcript Import & Action Tracker]');
+  const MONDAY = '2026-10-12';
+  await test('resolves spoken deadlines relative to the meeting date', () => {
+    const cases: Array<[string, string | null]> = [
+      ['I will send it by Friday', '2026-10-16'],
+      ['Can you do this tomorrow?', '2026-10-13'],
+      ['Main report kal tak bhej dunga', '2026-10-13'],
+      ['Deliver on 2026-10-20 please', '2026-10-20'],
+      ['We will pick this up next week', '2026-10-19'],
+      ['We should improve the onboarding flow', null],
+    ];
+    for (const [text, expected] of cases) {
+      const got = resolveDeadline(text, MONDAY);
+      assert(got === expected, `"${text}": expected ${expected}, got ${got}`);
+    }
+  });
+
+  await test('parses Google Meet export with standalone timestamp lines', () => {
+    const raw = ['Design Sync - Transcript', '', '00:00:05', 'Alice: Welcome everyone, lets begin.', '00:00:12', 'Bob: Thanks Alice.'].join('\n');
+    const normalized = TranscriptService.normalize(raw);
+    assert(normalized.includes('Alice [00:00:05]: Welcome everyone'), `Timestamp should attach to Alice line, got: ${normalized}`);
+    const result = TranscriptService.parseRawTranscript(raw);
+    const alice = result.entries.find((e) => e.text.startsWith('Welcome'));
+    assert(!!alice, 'Alice entry must be parsed');
+    assert(alice!.speaker === 'Alice', `Speaker should be Alice, got ${alice!.speaker}`);
+    assert(alice!.timestamp === '00:00:05', `Timestamp should be 00:00:05, got ${alice!.timestamp}`);
+    assert(!result.speakers.includes('00'), 'Timestamp fragments must not become speakers');
+  });
+
+  await test('extracts action item with resolved deadline', () => {
+    const entries = [{ speaker: 'Priya', text: 'Thanks all. I will send the report by Friday.' }];
+    const actions = TranscriptService.extractActionItemsHeuristic(entries, MONDAY);
+    const item = actions.find((a) => /send the report/i.test(a.task));
+    assert(!!item, `Should find "send the report" action, got ${JSON.stringify(actions)}`);
+    assert(item!.dueDate === '2026-10-16', `Due date should be 2026-10-16, got ${item!.dueDate}`);
+    assert(item!.assignee === 'Priya', `Assignee should be speaker Priya, got ${item!.assignee}`);
+  });
+
+  const trackerBase = (over: Partial<TrackerInput>): TrackerInput => ({
+    id: Math.random().toString(36).slice(2),
+    text: 'Task',
+    owner: 'Alice',
+    status: 'todo',
+    priority: 'medium',
+    meetingId: 'm1',
+    meetingTitle: 'Sprint Review',
+    meetingDate: '2026-10-05',
+    createdAt: '2026-10-05T10:00:00.000Z',
+    ...over,
+  });
+
+  await test('classifies action items by delivery state', () => {
+    const today = '2026-10-12';
+    const overdue = classify(trackerBase({ deadline: '2026-10-09' }), today);
+    assert(overdue.state === 'overdue' && overdue.daysLate === 3, `Expected overdue by 3, got ${overdue.state}/${overdue.daysLate}`);
+    const soon = classify(trackerBase({ deadline: '2026-10-13', status: 'doing' }), today);
+    assert(soon.state === 'due_soon' && soon.daysLeft === 1, `Expected due_soon, got ${soon.state}`);
+    const late = classify(trackerBase({ deadline: '2026-10-08', status: 'done', completedAt: '2026-10-10T09:00:00.000Z' }), today);
+    assert(late.state === 'done_late' && late.daysLate === 2, `Expected done_late by 2, got ${late.state}/${late.daysLate}`);
+    const onTime = classify(trackerBase({ deadline: '2026-10-10', status: 'done', completedAt: '2026-10-09T09:00:00.000Z' }), today);
+    assert(onTime.state === 'done_on_time', `Expected done_on_time, got ${onTime.state}`);
+    const noDeadline = classify(trackerBase({}), today);
+    assert(noDeadline.state === 'no_deadline', `Expected no_deadline, got ${noDeadline.state}`);
+  });
+
+  await test('summarizes tracker totals, progress and groups', () => {
+    const today = '2026-10-12';
+    const summary = summarize(
+      [
+        trackerBase({ deadline: '2026-10-09' }),
+        trackerBase({ deadline: '2026-10-13', status: 'doing', owner: 'Bob' }),
+        trackerBase({ deadline: '2026-10-08', status: 'done', completedAt: '2026-10-10T09:00:00.000Z' }),
+        trackerBase({ deadline: '2026-10-20', status: 'done', completedAt: '2026-10-09T09:00:00.000Z', owner: 'Bob', meetingId: 'm2', meetingTitle: 'Planning', meetingDate: '2026-10-07' }),
+      ],
+      today
+    );
+    const t = summary.totals;
+    assert(t.total === 4, `total should be 4, got ${t.total}`);
+    assert(t.done === 2 && t.todo === 1 && t.doing === 1, 'status counts mismatch');
+    assert(t.overdue === 1 && t.dueSoon === 1, 'overdue/dueSoon mismatch');
+    assert(t.doneLate === 1 && t.doneOnTime === 1, 'done late/on time mismatch');
+    assert(t.progress === 50, `progress should be 50, got ${t.progress}`);
+    assert(t.onTimeRate === 50, `onTimeRate should be 50, got ${t.onTimeRate}`);
+    assert(summary.items[0].state === 'overdue', 'Overdue items should sort first');
+    assert(summary.byOwner.length === 2 && summary.byMeeting.length === 2, 'Should group by owner and meeting');
+    assert(summary.byMeeting[0].key === 'm2', 'Meetings should be sorted newest first');
+    assert(summary.weekly.length === 6, 'Weekly series should cover 6 weeks');
+    assert(summarize([], today).totals.progress === 0, 'Empty tracker progress should be 0');
   });
 
   // Summary

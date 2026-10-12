@@ -149,3 +149,31 @@
 .cal-cell.sel .dots i.o{background:#fff}
 .cal-cell:focus-visible{outline-offset:1px}
 .upcoming li .dl{margin-left:auto}
+
+/* ---- Action Tracker ---- */
+.trk-kpis{display:grid;gap:var(--gap);grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr))}
+.trk-ring{flex-direction:row;align-items:center;gap:12px;grid-column:span 2}
+@media (max-width:520px){.trk-ring{grid-column:auto}}
+.trk-groups{max-height:420px;overflow:auto}
+.trk-table{min-width:760px}
+.trk-table th{font-size:.72em;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+.trk-table td{vertical-align:top}.trk-text{min-width:220px;max-width:380px}
+.trk-table tr.trk-overdue td:first-child{box-shadow:inset 3px 0 0 var(--err)}
+.trk-table tr.trk-done_late td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.trk-table tr.trk-done_on_time td:first-child{box-shadow:inset 3px 0 0 var(--ok)}
+.trk-card-sk{height:150px}
+.trk-hint{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0}
+.trk-card .stat::after{display:none}.trk-card .stat:hover{transform:none;box-shadow:none}
+
+/* recording upload + transcript */
+.rec-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:100%;padding:22px 16px;border:1.5px dashed var(--border);border-radius:14px;background:var(--surface-2);color:var(--text);font:inherit;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+.rec-drop:hover:not(:disabled),.rec-drop.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,var(--surface))}.rec-drop:disabled{cursor:progress;opacity:.7}
+.rec-drop b{word-break:break-all}.rec-current{display:inline-flex;align-items:center;gap:6px}
+.rec-transcript summary{cursor:pointer;list-style-position:inside}
+.rec-lines{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:480px;overflow:auto}
+.rec-lines li{display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--border)}
+.rec-ts{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.8em;min-width:3.5em}.rec-spk{white-space:nowrap}.rec-txt{min-width:0;overflow-wrap:anywhere}
+@media (max-width:560px){.rec-lines li{grid-template-columns:auto 1fr}.rec-txt{grid-column:1/-1}}
+.rec-item{display:flex;align-items:flex-start;gap:8px}.rec-item-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.rec-item-meta{gap:6px}
+.rec-status{flex:none;font:inherit;font-size:.85em;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)}
+.rec-late{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}

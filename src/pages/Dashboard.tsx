@@ -5,6 +5,7 @@ import { classifyIntent, FOCUS_LABEL, type AdaptiveConfig } from '../features/ad
 import { adaptationService } from '../api/services';
 import { BaseWidget, DataProvider, FocusWidget, useData } from '../features/adaptive/Widgets';
 import { CalendarWidget, ProgressPanel, SummaryCards, TaskTable, UpcomingTasks } from '../features/dashboard/panels';
+import ActionTrackerCard from '../features/dashboard/ActionTrackerCard';
 import { isOverdue } from '../features/dashboard/helpers';
 import { useTaskStatus } from '../features/dashboard/useTaskStatus';
 import { ALL_WIDGETS, DEFAULTS, usePrefs } from '../features/personalization/PrefsContext';
@@ -128,6 +129,7 @@ function DashboardInner() {
       </section>}
 
       <SummaryCards tasks={tasks} status={status.tasks} />
+      <ActionTrackerCard />
 
       <div className="dash-grid">
         <div className="dash-col">

@@ -5,6 +5,8 @@ export interface ApiResponse<T = any> {
   message?: string;
   data?: T;
   error?: string;
+  /** Machine-readable error code (e.g. VALIDATION_ERROR, AI_PROVIDER_ERROR). */
+  code?: string;
   errors?: any[];
   meta?: {
     page?: number;
@@ -51,11 +53,13 @@ export function sendError(
   res: Response,
   message = 'An error occurred',
   statusCode = 500,
-  details?: any
+  details?: any,
+  code?: string
 ): Response {
   const body: ApiResponse = {
     success: false,
     error: message,
+    ...(code && { code }),
     ...(details && { errors: Array.isArray(details) ? details : [details] }),
   };
   return res.status(statusCode).json(body);
