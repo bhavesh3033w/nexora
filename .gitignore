@@ -1,0 +1,22 @@
+node_modules
+dist
+.env.local
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+backend/.env
+
+# Dependencies and build files
+node_modules/
+backend/node_modules/
+dist/
+backend/dist/
+
+# macOS
+.DS_Store
+
+# Dependencies
+**/node_modules/
+**/dist/
